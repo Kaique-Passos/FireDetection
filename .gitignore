@@ -1,0 +1,19 @@
+# blacklist datasets
+/datasets/*/*
+/datasets/video_test
+
+# whitelist dataset prep
+!/datasets/*/*.sh
+!/datasets/*/*.py
+!/datasets/*/*.csv
+
+# saved models folder
+/models/saved/**.pdf
+/models/saved/**/*.png
+/models/results/*.pdf
+# best on-training model
+/models/saved/**/best_model_*.pth
+
+# editors and cache folders
+/.spyproject
+**/__pycache__
