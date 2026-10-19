@@ -1,10 +1,13 @@
 import os
 import json
+import shutil
 import torch
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from contextlib import redirect_stdout
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from scipy import stats
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
@@ -50,18 +53,75 @@ def save_plots(history, folder_path):
         plt.close(fig)
 # end save_plots
 
-def get_kfold_path(base_model, dataset_name='firenet', k=10, version=None, save_root='.'):
-    final_folder = '{}_kfold{}'.format(dataset_name, k)
-    if version is not None:
-        final_folder = '{}_{}'.format(final_folder, version)
+IN_PROGRESS_FOLDER = '_em_andamento'
+RUN_CONFIG_FILE = 'config.json'
 
-    return os.path.join(save_root, 'models', 'saved', base_model, final_folder)
-# end get_kfold_path
+def now_str(timezone='America/Sao_Paulo'):
+    return datetime.now(ZoneInfo(timezone)).strftime('%Y-%m-%d_%H-%M-%S')
+# end now_str
 
-def run_kfold(base_model, dataset_name='firenet', k=10, epochs=100, batch_size=32,
-              seed=666, test_dataset_name='firenet_test', preload_data=True,
-              use_cuda=None, version=None, save_root='.'):
-    """Train `base_model` with stratified K-fold cross validation.
+def start_run(history_root, base_model, run_config):
+    """Folder where the run is trained: <history_root>/<model>/_em_andamento.
+
+    An interrupted run with the same configuration is resumed; a different
+    configuration raises an error instead of mixing results."""
+    run_path = os.path.join(history_root, base_model, IN_PROGRESS_FOLDER)
+    config_path = os.path.join(run_path, RUN_CONFIG_FILE)
+
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            saved_config = json.load(f)
+        saved_params = {c: v for c, v in saved_config.items() if c != 'started_at'}
+
+        if saved_params != run_config:
+            raise ValueError('There is an unfinished run with another configuration at {}.\n'
+                             'Saved: {}\nCurrent: {}\nUse the same configuration to resume it '
+                             'or delete that folder to start over.'.format(
+                                run_path, saved_params, run_config))
+        print('Resuming unfinished run started at', saved_config['started_at'])
+    else:
+        os.makedirs(run_path, exist_ok=True)
+        with open(config_path, 'w') as f:
+            json.dump(dict(run_config, started_at=now_str()), f, indent=2)
+
+    return run_path
+# end start_run
+
+def finish_run(history_root, base_model):
+    """Move the finished run to <history_root>/<model>/<date_time>."""
+    run_path = os.path.join(history_root, base_model, IN_PROGRESS_FOLDER)
+    config_path = os.path.join(run_path, RUN_CONFIG_FILE)
+    finished_at = now_str()
+
+    with open(config_path) as f:
+        run_config = json.load(f)
+    run_config['finished_at'] = finished_at
+    with open(config_path, 'w') as f:
+        json.dump(run_config, f, indent=2)
+
+    final_path = os.path.join(history_root, base_model, finished_at)
+    shutil.move(run_path, final_path)
+    print('Run saved at', final_path)
+
+    return final_path
+# end finish_run
+
+def list_runs(history_root, base_model):
+    """Finished runs of a model, oldest first."""
+    model_path = os.path.join(history_root, base_model)
+    if not os.path.isdir(model_path):
+        return []
+
+    return sorted(os.path.join(model_path, d) for d in os.listdir(model_path)
+                  if d != IN_PROGRESS_FOLDER
+                  and os.path.exists(os.path.join(model_path, d, 'kfold_results.csv')))
+# end list_runs
+
+def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
+              batch_size=32, seed=666, test_dataset_name='firenet_test',
+              preload_data=True, use_cuda=None):
+    """Train `base_model` with stratified K-fold cross validation, saving the
+    results at `folder_path`.
 
     The whole dataset (train + val rows of the CSV) is split in `k` folds; on
     each round one fold is held out for validation and the other k-1 are used
@@ -99,7 +159,6 @@ def run_kfold(base_model, dataset_name='firenet', k=10, epochs=100, batch_size=3
     labels = train_full.data['class'].map(lambda c: train_full.labels[c]['idx']).values
     folds = make_folds(labels, k=k, seed=seed)
 
-    folder_path = get_kfold_path(base_model, dataset_name, k, version, save_root)
     os.makedirs(folder_path, exist_ok=True)
     print('K-fold ({} folds) results will be saved at {}'.format(k, folder_path))
 
@@ -198,8 +257,7 @@ def run_kfold(base_model, dataset_name='firenet', k=10, epochs=100, batch_size=3
     return results_df, summary
 # end run_kfold
 
-def load_kfold_results(base_model, dataset_name='firenet', k=10, version=None, save_root='.'):
-    folder_path = get_kfold_path(base_model, dataset_name, k, version, save_root)
+def load_kfold_results(folder_path):
     return pd.read_csv(os.path.join(folder_path, 'kfold_results.csv'))
 # end load_kfold_results
 
