@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from scipy import stats
 from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+from sklearn.metrics import confusion_matrix
 from torch.utils.data import Subset
 from datasets import available_datasets
 from .models import models_conf
@@ -25,20 +26,36 @@ def make_folds(labels, k=10, seed=666):
     return list(skf.split(np.zeros(len(labels)), labels))
 # end make_folds
 
-def evaluate(model, dataset, batch_size=32, use_cuda=True):
+def evaluate(model, dataset, images, batch_size=32, use_cuda=True):
+    """Metrics plus the per-image predictions. `images` holds the rows of the
+    dataset CSV in the same order as `dataset` (the test loader does not
+    shuffle), so each prediction can be traced back to its image."""
     y_true, y_prob, _ = test_model(model, dataset, batch_size=batch_size, use_cuda=use_cuda)
     y_pred = y_prob.argmax(axis=1)
     # positive class: fire (idx 1)
     precision, recall, f1, _ = precision_recall_fscore_support(
         y_true, y_pred, average='binary', pos_label=1, zero_division=0)
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
 
-    return {
+    metrics = {
         'accuracy': float(accuracy_score(y_true, y_pred)),
         'precision': float(precision),
         'recall': float(recall),
         'f1': float(f1),
-        'auc': float(roc_auc_score(y_true, y_prob[:, 1]))
+        'auc': float(roc_auc_score(y_true, y_prob[:, 1])),
+        'tp': int(tp),
+        'fp': int(fp),
+        'tn': int(tn),
+        'fn': int(fn)
     }
+
+    predictions = images[['folder_path', 'image_id', 'class']].reset_index(drop=True)
+    predictions['y_true'] = y_true
+    predictions['y_pred'] = y_pred
+    predictions['prob_fire'] = y_prob[:, 1]
+    predictions['correct'] = (y_true == y_pred).astype(int)
+
+    return metrics, predictions
 # end evaluate
 
 def save_history_plots(history, folder_path):
@@ -223,11 +240,17 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
         model.load_state_dict(best_model)
         with open(os.path.join(fold_path, 'testing.log'), 'w') as f:
             with redirect_stdout(f):
-                val_metrics = evaluate(model, val_data, batch_size=batch_size, use_cuda=use_cuda)
+                val_metrics, val_pred = evaluate(model, val_data, train_full.data.iloc[val_idx],
+                                                 batch_size=batch_size, use_cuda=use_cuda)
                 test_metrics = None
                 if test_data is not None:
-                    test_metrics = evaluate(model, test_data, batch_size=batch_size,
-                                            use_cuda=use_cuda)
+                    test_metrics, test_pred = evaluate(model, test_data, test_data.data,
+                                                       batch_size=batch_size, use_cuda=use_cuda)
+
+        # per-image predictions (saved before metrics.json, which marks the fold as done)
+        val_pred.to_csv(os.path.join(fold_path, 'predictions_val.csv'), index=False)
+        if test_data is not None:
+            test_pred.to_csv(os.path.join(fold_path, 'predictions_test.csv'), index=False)
 
         row = {
             'fold': fold,
@@ -295,8 +318,10 @@ def compare_kfold(results_a, results_b, name_a='A', name_b='B', metrics=None):
     """Mean ± std of each metric for both models, plus paired tests over the
     folds (both models used the same folds, so the samples are paired)."""
     if metrics is None:
+        # rates only, the confusion matrix counts are left out
         metrics = [c for c in results_a.columns
-                   if c.startswith('val_') or c.startswith('test_')]
+                   if (c.startswith('val_') or c.startswith('test_'))
+                   and c.split('_', 1)[1] not in ('tp', 'fp', 'tn', 'fn')]
 
     a = results_a.sort_values('fold').reset_index(drop=True)
     b = results_b.sort_values('fold').reset_index(drop=True)
