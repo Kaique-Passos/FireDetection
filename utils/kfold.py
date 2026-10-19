@@ -189,6 +189,11 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
         folds_df.iloc[val_idx, folds_df.columns.get_loc('fold')] = fold
     folds_df.to_csv(os.path.join(folder_path, 'folds.csv'), index=False)
 
+    # and of the independent test images, the same for every fold and model
+    if test_data is not None:
+        test_data.data[['folder_path', 'image_id', 'class']].to_csv(
+            os.path.join(folder_path, 'test_images.csv'), index=False)
+
     results = []
     for fold, (train_idx, val_idx) in enumerate(folds, start=1):
         fold_path = os.path.join(folder_path, 'fold_{:02d}'.format(fold))
@@ -289,30 +294,48 @@ def load_kfold_results(folder_path):
     return pd.read_csv(os.path.join(folder_path, 'kfold_results.csv'))
 # end load_kfold_results
 
-def folds_hash(folder_path):
-    """SHA-256 of the run's folds.csv: equal hashes mean identical fold splits."""
-    with open(os.path.join(folder_path, 'folds.csv'), 'rb') as f:
+def file_hash(folder_path, file_name):
+    """SHA-256 of a run's file: equal hashes mean identical files."""
+    with open(os.path.join(folder_path, file_name), 'rb') as f:
         return hashlib.sha256(f.read()).hexdigest()
-# end folds_hash
+# end file_hash
 
-def check_same_folds(run_paths):
-    """Check that every run used exactly the same image -> fold assignment."""
-    reference = pd.read_csv(os.path.join(run_paths[0], 'folds.csv'))
+def check_same_file(run_paths, file_name):
+    """Check that every run saved exactly the same `file_name` table. A run
+    without the file (older runs) is reported as not matching."""
+    reference = None
     report = []
 
     for path in run_paths:
-        folds_df = pd.read_csv(os.path.join(path, 'folds.csv'))
+        file_path = os.path.join(path, file_name)
+        if not os.path.exists(file_path):
+            report.append({'run': path, 'images': None, 'sha256': None,
+                           'same_as_first': False})
+            continue
+
+        df = pd.read_csv(file_path)
+        if reference is None:
+            reference = df
         report.append({
             'run': path,
-            'images': len(folds_df),
-            'folds_sha256': folds_hash(path),
-            'same_as_first': folds_df.equals(reference)
+            'images': len(df),
+            'sha256': file_hash(path, file_name),
+            'same_as_first': df.equals(reference)
         })
 
     report = pd.DataFrame(report)
     return bool(report['same_as_first'].all()), report
+# end check_same_file
+
+def check_same_folds(run_paths):
+    """Same image -> validation fold assignment in every run (folds.csv)."""
+    return check_same_file(run_paths, 'folds.csv')
 # end check_same_folds
-# end load_kfold_results
+
+def check_same_test_images(run_paths):
+    """Same independent test images in every run (test_images.csv)."""
+    return check_same_file(run_paths, 'test_images.csv')
+# end check_same_test_images
 
 def compare_kfold(results_a, results_b, name_a='A', name_b='B', metrics=None):
     """Mean ± std of each metric for both models, plus paired tests over the
