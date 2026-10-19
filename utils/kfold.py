@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+import hashlib
 import torch
 import numpy as np
 import pandas as pd
@@ -40,7 +41,7 @@ def evaluate(model, dataset, batch_size=32, use_cuda=True):
     }
 # end evaluate
 
-def save_plots(history, folder_path):
+def save_history_plots(history, folder_path):
     for key, title in [('acc', 'accuracy'), ('loss', 'loss')]:
         fig = plt.figure()
         plt.plot(history[key])
@@ -119,9 +120,11 @@ def list_runs(history_root, base_model):
 
 def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
               batch_size=32, seed=666, test_dataset_name='firenet_test',
-              preload_data=True, use_cuda=None):
+              preload_data=True, use_cuda=None, save_models=False, save_plots=False):
     """Train `base_model` with stratified K-fold cross validation, saving the
-    results at `folder_path`.
+    results at `folder_path`. By default only the metrics, the training
+    history and the fold split are saved; `save_models` and `save_plots` also
+    save each fold's best weights and accuracy/loss plots.
 
     The whole dataset (train + val rows of the CSV) is split in `k` folds; on
     each round one fold is held out for validation and the other k-1 are used
@@ -210,9 +213,11 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
                             train_data, val_data, epochs=epochs, batch_size=batch_size,
                             shuffle_dataset=True, scheduler=scheduler, use_cuda=use_cuda)
 
-        torch.save(best_model, os.path.join(fold_path, config['model_path']))
         save_history(history, file_path=os.path.join(fold_path, 'history.csv'))
-        save_plots(history, fold_path)
+        if save_models:
+            torch.save(best_model, os.path.join(fold_path, config['model_path']))
+        if save_plots:
+            save_history_plots(history, fold_path)
 
         # evaluate the best epoch's weights
         model.load_state_dict(best_model)
@@ -259,6 +264,31 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
 
 def load_kfold_results(folder_path):
     return pd.read_csv(os.path.join(folder_path, 'kfold_results.csv'))
+# end load_kfold_results
+
+def folds_hash(folder_path):
+    """SHA-256 of the run's folds.csv: equal hashes mean identical fold splits."""
+    with open(os.path.join(folder_path, 'folds.csv'), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()
+# end folds_hash
+
+def check_same_folds(run_paths):
+    """Check that every run used exactly the same image -> fold assignment."""
+    reference = pd.read_csv(os.path.join(run_paths[0], 'folds.csv'))
+    report = []
+
+    for path in run_paths:
+        folds_df = pd.read_csv(os.path.join(path, 'folds.csv'))
+        report.append({
+            'run': path,
+            'images': len(folds_df),
+            'folds_sha256': folds_hash(path),
+            'same_as_first': folds_df.equals(reference)
+        })
+
+    report = pd.DataFrame(report)
+    return bool(report['same_as_first'].all()), report
+# end check_same_folds
 # end load_kfold_results
 
 def compare_kfold(results_a, results_b, name_a='A', name_b='B', metrics=None):
