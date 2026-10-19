@@ -1,0 +1,235 @@
+import os
+import json
+import torch
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from contextlib import redirect_stdout
+from scipy import stats
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support, roc_auc_score
+from torch.utils.data import Subset
+from datasets import available_datasets
+from .models import models_conf
+from .training import get_model, train_model, test_model, save_history
+
+
+def make_folds(labels, k=10, seed=666):
+    """Stratified K-fold splits. Same labels + seed always yield the same folds,
+    so every model is trained and validated on exactly the same partitions."""
+    skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
+    return list(skf.split(np.zeros(len(labels)), labels))
+# end make_folds
+
+def evaluate(model, dataset, batch_size=32, use_cuda=True):
+    y_true, y_prob, _ = test_model(model, dataset, batch_size=batch_size, use_cuda=use_cuda)
+    y_pred = y_prob.argmax(axis=1)
+    # positive class: fire (idx 1)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        y_true, y_pred, average='binary', pos_label=1, zero_division=0)
+
+    return {
+        'accuracy': float(accuracy_score(y_true, y_pred)),
+        'precision': float(precision),
+        'recall': float(recall),
+        'f1': float(f1),
+        'auc': float(roc_auc_score(y_true, y_prob[:, 1]))
+    }
+# end evaluate
+
+def save_plots(history, folder_path):
+    for key, title in [('acc', 'accuracy'), ('loss', 'loss')]:
+        fig = plt.figure()
+        plt.plot(history[key])
+        plt.plot(history['val_' + key])
+        plt.title('Model {}'.format(title))
+        plt.ylabel(title.capitalize())
+        plt.xlabel('Epoch')
+        plt.legend(['Training', 'Validation'], loc='upper left')
+        fig.savefig(os.path.join(folder_path, '{}.png'.format(title)))
+        plt.close(fig)
+# end save_plots
+
+def get_kfold_path(base_model, dataset_name='firenet', k=10, version=None, save_root='.'):
+    final_folder = '{}_kfold{}'.format(dataset_name, k)
+    if version is not None:
+        final_folder = '{}_{}'.format(final_folder, version)
+
+    return os.path.join(save_root, 'models', 'saved', base_model, final_folder)
+# end get_kfold_path
+
+def run_kfold(base_model, dataset_name='firenet', k=10, epochs=100, batch_size=32,
+              seed=666, test_dataset_name='firenet_test', preload_data=True,
+              use_cuda=None, version=None, save_root='.'):
+    """Train `base_model` with stratified K-fold cross validation.
+
+    The whole dataset (train + val rows of the CSV) is split in `k` folds; on
+    each round one fold is held out for validation and the other k-1 are used
+    for training. The best epoch's weights (by validation accuracy) are then
+    evaluated on the held-out fold and on the independent test set.
+
+    Folds already finished (fold_XX/metrics.json exists) are skipped, so the
+    run can be resumed after a Colab disconnection.
+    """
+    if use_cuda is None:
+        use_cuda = torch.cuda.is_available()
+
+    if use_cuda:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+    config = models_conf[base_model]
+    num_classes = available_datasets[dataset_name]['num_classes']
+    base_dataset = available_datasets[dataset_name]['class']
+
+    # purpose=None ignores the original train/val split and keeps every image
+    train_full = base_dataset(transform=config['preprocess_train'], purpose=None,
+                              preload=preload_data)
+    if repr(config['preprocess_val']) == repr(config['preprocess_train']):
+        val_full = train_full # same preprocessing, avoid loading the images twice
+    else:
+        val_full = base_dataset(transform=config['preprocess_val'], purpose=None,
+                                preload=preload_data)
+
+    test_data = None
+    if test_dataset_name is not None:
+        test_dataset = available_datasets[test_dataset_name]['class']
+        test_data = test_dataset(transform=config['preprocess_test'], preload=preload_data)
+
+    labels = train_full.data['class'].map(lambda c: train_full.labels[c]['idx']).values
+    folds = make_folds(labels, k=k, seed=seed)
+
+    folder_path = get_kfold_path(base_model, dataset_name, k, version, save_root)
+    os.makedirs(folder_path, exist_ok=True)
+    print('K-fold ({} folds) results will be saved at {}'.format(k, folder_path))
+
+    # keep a record of which image belongs to which validation fold
+    folds_df = train_full.data[['folder_path', 'image_id', 'class']].copy()
+    folds_df['fold'] = 0
+    for fold, (_, val_idx) in enumerate(folds, start=1):
+        folds_df.iloc[val_idx, folds_df.columns.get_loc('fold')] = fold
+    folds_df.to_csv(os.path.join(folder_path, 'folds.csv'), index=False)
+
+    results = []
+    for fold, (train_idx, val_idx) in enumerate(folds, start=1):
+        fold_path = os.path.join(folder_path, 'fold_{:02d}'.format(fold))
+        metrics_file = os.path.join(fold_path, 'metrics.json')
+
+        if os.path.exists(metrics_file):
+            print('Fold {:02d}/{:02d}: already done, skipping'.format(fold, k))
+            with open(metrics_file) as f:
+                results.append(json.load(f))
+            continue
+
+        os.makedirs(fold_path, exist_ok=True)
+        print('Fold {:02d}/{:02d}: training on {} images, validating on {}'.format(
+            fold, k, len(train_idx), len(val_idx)))
+
+        # seed per fold, so a resumed run gives the same result as a full run
+        torch.manual_seed(seed + fold)
+        np.random.seed(seed + fold)
+
+        model, _ = get_model(base_model, num_classes=num_classes)
+        criterion = config['criterion']
+        opt_args = {'params': model.parameters()}
+        opt_args.update(config['optimizer_params'])
+        optimizer = config['optimizer'](**opt_args)
+        scheduler = None
+
+        if config['scheduler'] is not None:
+            sched_args = {'optimizer': optimizer}
+            sched_args.update(config['scheduler_params'])
+            scheduler = config['scheduler'](**sched_args)
+
+        train_data = Subset(train_full, train_idx)
+        val_data = Subset(val_full, val_idx)
+
+        with open(os.path.join(fold_path, 'training.log'), 'w') as f:
+            with redirect_stdout(f):
+                print(model)
+                history, best_model, time_elapsed = train_model(model, criterion, optimizer,
+                            train_data, val_data, epochs=epochs, batch_size=batch_size,
+                            shuffle_dataset=True, scheduler=scheduler, use_cuda=use_cuda)
+
+        torch.save(best_model, os.path.join(fold_path, config['model_path']))
+        save_history(history, file_path=os.path.join(fold_path, 'history.csv'))
+        save_plots(history, fold_path)
+
+        # evaluate the best epoch's weights
+        model.load_state_dict(best_model)
+        with open(os.path.join(fold_path, 'testing.log'), 'w') as f:
+            with redirect_stdout(f):
+                val_metrics = evaluate(model, val_data, batch_size=batch_size, use_cuda=use_cuda)
+                test_metrics = None
+                if test_data is not None:
+                    test_metrics = evaluate(model, test_data, batch_size=batch_size,
+                                            use_cuda=use_cuda)
+
+        row = {
+            'fold': fold,
+            'best_epoch': int(np.argmax(history['val_acc']) + 1),
+            'train_time_s': float(time_elapsed)
+        }
+        row.update({'val_' + m: v for m, v in val_metrics.items()})
+        if test_metrics is not None:
+            row.update({'test_' + m: v for m, v in test_metrics.items()})
+
+        with open(metrics_file, 'w') as f:
+            json.dump(row, f, indent=2)
+        results.append(row)
+
+        summary_line = 'Fold {:02d}/{:02d} done in {:.0f}m {:.0f}s | val acc: {:.4f}'.format(
+            fold, k, time_elapsed // 60, time_elapsed % 60, row['val_accuracy'])
+        if test_metrics is not None:
+            summary_line += ' | test acc: {:.4f}'.format(row['test_accuracy'])
+        print(summary_line)
+
+        # free GPU memory before the next fold
+        del model, optimizer, scheduler, best_model
+        if use_cuda:
+            torch.cuda.empty_cache()
+
+    results_df = pd.DataFrame(results).sort_values('fold').reset_index(drop=True)
+    results_df.to_csv(os.path.join(folder_path, 'kfold_results.csv'), index=False)
+
+    summary = results_df.drop(columns=['fold']).agg(['mean', 'std']).T
+    summary.to_csv(os.path.join(folder_path, 'kfold_summary.csv'))
+
+    return results_df, summary
+# end run_kfold
+
+def load_kfold_results(base_model, dataset_name='firenet', k=10, version=None, save_root='.'):
+    folder_path = get_kfold_path(base_model, dataset_name, k, version, save_root)
+    return pd.read_csv(os.path.join(folder_path, 'kfold_results.csv'))
+# end load_kfold_results
+
+def compare_kfold(results_a, results_b, name_a='A', name_b='B', metrics=None):
+    """Mean ± std of each metric for both models, plus paired tests over the
+    folds (both models used the same folds, so the samples are paired)."""
+    if metrics is None:
+        metrics = [c for c in results_a.columns
+                   if c.startswith('val_') or c.startswith('test_')]
+
+    a = results_a.sort_values('fold').reset_index(drop=True)
+    b = results_b.sort_values('fold').reset_index(drop=True)
+    rows = []
+
+    for m in metrics:
+        diff = a[m] - b[m]
+        row = {
+            'metric': m,
+            name_a: '{:.4f} ± {:.4f}'.format(a[m].mean(), a[m].std()),
+            name_b: '{:.4f} ± {:.4f}'.format(b[m].mean(), b[m].std()),
+            'diff_mean': diff.mean(),
+            't_test_p': np.nan,
+            'wilcoxon_p': np.nan
+        }
+
+        if np.any(diff != 0):
+            row['t_test_p'] = stats.ttest_rel(a[m], b[m]).pvalue
+            row['wilcoxon_p'] = stats.wilcoxon(a[m], b[m]).pvalue
+
+        rows.append(row)
+
+    return pd.DataFrame(rows)
+# end compare_kfold

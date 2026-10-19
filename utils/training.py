@@ -120,9 +120,10 @@ def train_model(model, criterion, optimizer, train_data, val_data, epochs=100, b
                 # zero the parameter gradients
                 optimizer.zero_grad()
 
-                # forward
-                outputs = model(inputs)
-                loss = criterion(outputs, labels)
+                # forward, tracking gradients only in training phase
+                with torch.set_grad_enabled(phase == 'train'):
+                    outputs = model(inputs)
+                    loss = criterion(outputs, labels)
 
                 # backward + optimize only if in training phase
                 if phase == 'train':
