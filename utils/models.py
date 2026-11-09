@@ -209,5 +209,44 @@ models_conf['mobilenetv3'] = {
     'scheduler_params': {}
 }
 
+# MobileNetV3 Small com pesos pré-treinados na ImageNet (transfer learning).
+# As imagens são normalizadas com a média e o desvio padrão da ImageNet, como
+# no pré-treino, e a taxa de aprendizado é menor (1e-4) para fazer o
+# fine-tuning sem destruir os pesos aprendidos.
+imagenet_normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                          std=[0.229, 0.224, 0.225])
+
+models_conf['mobilenetv3_imagenet'] = {
+    'img_dims': (224, 224),
+    'model_name': 'MobileNetV3 Small (ImageNet)',
+    'model_path': 'model_mobilenetv3_imagenet.pth',
+    'class_name': 'MobileNetV3ImageNet',
+    'module_name': 'models.mobilenetv3',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-4},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
 def get_config(base_model):
     return models_conf[base_model]
