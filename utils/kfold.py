@@ -137,11 +137,15 @@ def list_runs(history_root, base_model):
 
 def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
               batch_size=32, seed=666, test_dataset_name='firenet_test',
-              preload_data=True, use_cuda=None, save_models=False, save_plots=False):
+              preload_data=True, use_cuda=None, save_models=False, save_plots=False,
+              patience=None):
     """Train `base_model` with stratified K-fold cross validation, saving the
     results at `folder_path`. By default only the metrics, the training
     history and the fold split are saved; `save_models` and `save_plots` also
     save each fold's best weights and accuracy/loss plots.
+
+    `patience` turns on early stopping (see `train_model`): each fold stops
+    after `patience` epochs without improving on its validation fold.
 
     The whole dataset (train + val rows of the CSV) is split in `k` folds; on
     each round one fold is held out for validation and the other k-1 are used
@@ -233,7 +237,8 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
                 print(model)
                 history, best_model, time_elapsed = train_model(model, criterion, optimizer,
                             train_data, val_data, epochs=epochs, batch_size=batch_size,
-                            shuffle_dataset=True, scheduler=scheduler, use_cuda=use_cuda)
+                            shuffle_dataset=True, scheduler=scheduler, use_cuda=use_cuda,
+                            patience=patience)
 
         save_history(history, file_path=os.path.join(fold_path, 'history.csv'))
         if save_models:
@@ -260,6 +265,7 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
         row = {
             'fold': fold,
             'best_epoch': int(np.argmax(history['val_acc']) + 1),
+            'epochs_trained': len(history['val_acc']), # < epochs when early stopping kicked in
             'train_time_s': float(time_elapsed)
         }
         row.update({'val_' + m: v for m, v in val_metrics.items()})
@@ -270,8 +276,9 @@ def run_kfold(base_model, folder_path, dataset_name='firenet', k=10, epochs=100,
             json.dump(row, f, indent=2)
         results.append(row)
 
-        summary_line = 'Fold {:02d}/{:02d} done in {:.0f}m {:.0f}s | val acc: {:.4f}'.format(
-            fold, k, time_elapsed // 60, time_elapsed % 60, row['val_accuracy'])
+        summary_line = 'Fold {:02d}/{:02d} done in {:.0f}m {:.0f}s ({} epochs) | val acc: {:.4f}'.format(
+            fold, k, time_elapsed // 60, time_elapsed % 60, row['epochs_trained'],
+            row['val_accuracy'])
         if test_metrics is not None:
             summary_line += ' | test acc: {:.4f}'.format(row['test_accuracy'])
         print(summary_line)

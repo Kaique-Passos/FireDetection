@@ -68,7 +68,15 @@ def get_model(base_model='kutralnet', num_classes=2, extra_params=None):
 # end get_model
 
 def train_model(model, criterion, optimizer, train_data, val_data, epochs=100, batch_size=32,
-                shuffle_dataset=True, scheduler=None, use_cuda=True, pin_memory=False, callbacks=None):
+                shuffle_dataset=True, scheduler=None, use_cuda=True, pin_memory=False, callbacks=None,
+                patience=None):
+    """Train the model and return the history and the best epoch's weights
+    (by validation accuracy).
+
+    Early stopping: with `patience` set, training stops when the validation
+    set goes `patience` epochs in a row without improving, neither the
+    accuracy (above the best so far) nor the loss (below the lowest so far).
+    `patience=None` always trains for all `epochs`."""
     # prepare dataset
     train_loader = torch.utils.data.DataLoader(train_data, batch_size=batch_size,
                             pin_memory=pin_memory, shuffle=shuffle_dataset, num_workers=2)
@@ -87,6 +95,9 @@ def train_model(model, criterion, optimizer, train_data, val_data, epochs=100, b
     best_model_wts = copy.deepcopy(model.state_dict())
     best_acc = 0.0
     best_ep = 0
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
+    stopped_early = False
     history = {}
     history['loss'] = []
     history['acc'] = []
@@ -146,14 +157,21 @@ def train_model(model, criterion, optimizer, train_data, val_data, epochs=100, b
             history[acc_key].append(epoch_acc.item())
 
             print('{} Loss: {:.4f}'.format(phase.capitalize(), epoch_loss), 'Acc: {:.4f}'.format(epoch_acc), end=" | ")
-            # deep copy the model
-            if phase == 'val' and epoch_acc > best_acc:
-                best_acc = epoch_acc
-                best_ep = epoch +1
-                best_model_wts = copy.deepcopy(model.state_dict())
-                if callbacks is not None:
-                    for c in callbacks:
-                        c(best_model_wts, best_ep)
+            if phase == 'val':
+                improved = False
+                # deep copy the model
+                if epoch_acc > best_acc:
+                    best_acc = epoch_acc
+                    best_ep = epoch +1
+                    best_model_wts = copy.deepcopy(model.state_dict())
+                    improved = True
+                    if callbacks is not None:
+                        for c in callbacks:
+                            c(best_model_wts, best_ep)
+                if epoch_loss < best_val_loss:
+                    best_val_loss = epoch_loss
+                    improved = True
+                epochs_no_improve = 0 if improved else epochs_no_improve + 1
 
         if scheduler is not None:
             scheduler.step()
@@ -164,7 +182,14 @@ def train_model(model, criterion, optimizer, train_data, val_data, epochs=100, b
         print('time elapsed: {:.0f}m {:.0f}s'.format(
         epoch_elapsed // 60, epoch_elapsed % 60))
 
+        if patience is not None and epochs_no_improve >= patience:
+            stopped_early = True
+            print('Early stopping: {} epochs without improvement on validation'.format(patience))
+            break
+
     time_elapsed = time.time() - since
+    if stopped_early:
+        print('Stopped at epoch {} of {}'.format(epoch + 1, epochs))
     print('Training complete in {:.0f}m {:.0f}s'.format(
         time_elapsed // 60, time_elapsed % 60))
     print('Best accuracy on epoch {}: {:4f}'.format(best_ep, best_acc))
