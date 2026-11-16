@@ -180,35 +180,6 @@ models_conf['kutralnet_mobileoct'] = {
         'scheduler_params': {}
     }
 
-models_conf['mobilenetv3'] = {
-    'img_dims': (224, 224),
-    'model_name': 'MobileNetV3 Small',
-    'model_path': 'model_mobilenetv3.pth',
-    'class_name': 'MobileNetV3',
-    'module_name': 'models.mobilenetv3',
-    'criterion': CrossEntropyLoss(),
-    'optimizer': optim.Adam,
-    'optimizer_params': {'lr': 1e-3},
-
-    'preprocess_train': transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor()
-    ]),
-
-    'preprocess_val': transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor()
-    ]),
-
-    'preprocess_test': transforms.Compose([
-        transforms.Resize((224, 224)),
-        transforms.ToTensor()
-    ]),
-
-    'scheduler': None,
-    'scheduler_params': {}
-}
-
 # MobileNetV3 Small com pesos pré-treinados na ImageNet (transfer learning).
 # As imagens são normalizadas com a média e o desvio padrão da ImageNet, como
 # no pré-treino, e a taxa de aprendizado é menor (1e-4) para fazer o
