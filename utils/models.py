@@ -248,5 +248,69 @@ models_conf['mobilenetv3_imagenet'] = {
     'scheduler_params': {}
 }
 
+# ShuffleNetV2 x1.0 sem pesos (treino do zero), no mesmo esquema da 'mobilenetv3'
+models_conf['shufflenetv2'] = {
+    'img_dims': (224, 224),
+    'model_name': 'ShuffleNetV2 x1.0',
+    'model_path': 'model_shufflenetv2.pth',
+    'class_name': 'ShuffleNetV2',
+    'module_name': 'models.shufflenetv2',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-3},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor()
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
+# ShuffleNetV2 x1.0 com pesos da ImageNet, no mesmo esquema da
+# 'mobilenetv3_imagenet' (normalização da ImageNet e lr 1e-4)
+models_conf['shufflenetv2_imagenet'] = {
+    'img_dims': (224, 224),
+    'model_name': 'ShuffleNetV2 x1.0 (ImageNet)',
+    'model_path': 'model_shufflenetv2_imagenet.pth',
+    'class_name': 'ShuffleNetV2ImageNet',
+    'module_name': 'models.shufflenetv2',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-4},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
 def get_config(base_model):
     return models_conf[base_model]
