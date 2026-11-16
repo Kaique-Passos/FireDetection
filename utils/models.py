@@ -253,5 +253,39 @@ models_conf['shufflenetv2_imagenet'] = {
     'scheduler_params': {}
 }
 
+# EfficientNet-B0 com pesos da ImageNet, no mesmo esquema da
+# 'mobilenetv3_imagenet' (normalização da ImageNet e lr 1e-4)
+models_conf['efficientnetb0_imagenet'] = {
+    'img_dims': (224, 224),
+    'model_name': 'EfficientNet-B0 (ImageNet)',
+    'model_path': 'model_efficientnetb0_imagenet.pth',
+    'class_name': 'EfficientNetB0ImageNet',
+    'module_name': 'models.efficientnet',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-4},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
 def get_config(base_model):
     return models_conf[base_model]
