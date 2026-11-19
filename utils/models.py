@@ -287,5 +287,74 @@ models_conf['efficientnetb0_imagenet'] = {
     'scheduler_params': {}
 }
 
+# SqueezeNet 1.1 com pesos da ImageNet, no mesmo esquema da
+# 'mobilenetv3_imagenet' (normalização da ImageNet e lr 1e-4)
+models_conf['squeezenet_imagenet'] = {
+    'img_dims': (224, 224),
+    'model_name': 'SqueezeNet 1.1 (ImageNet)',
+    'model_path': 'model_squeezenet_imagenet.pth',
+    'class_name': 'SqueezeNetImageNet',
+    'module_name': 'models.squeezenet',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-4},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
+# ResNet-18 com pesos da ImageNet, no mesmo esquema da
+# 'mobilenetv3_imagenet' (normalização da ImageNet e lr 1e-4).
+# Diferente da 'resnet' acima (ResNet50 do artigo de Sharma et al.)
+models_conf['resnet18_imagenet'] = {
+    'img_dims': (224, 224),
+    'model_name': 'ResNet-18 (ImageNet)',
+    'model_path': 'model_resnet18_imagenet.pth',
+    'class_name': 'ResNet18ImageNet',
+    'module_name': 'models.resnet18',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-4},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
 def get_config(base_model):
     return models_conf[base_model]
