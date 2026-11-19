@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from contextlib import redirect_stdout
+from itertools import combinations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from scipy import stats
@@ -376,3 +377,91 @@ def compare_kfold(results_a, results_b, name_a='A', name_b='B', metrics=None):
 
     return pd.DataFrame(rows)
 # end compare_kfold
+
+
+def holm_correction(p_values):
+    """Holm-Bonferroni adjusted p-values (same order as the input)."""
+    p = np.asarray(p_values, dtype=float)
+    m = len(p)
+    adjusted = np.empty(m)
+    running_max = 0.0
+    for position, idx in enumerate(np.argsort(p)):
+        running_max = max(running_max, min(1.0, (m - position) * p[idx]))
+        adjusted[idx] = running_max
+    return adjusted
+# end holm_correction
+
+
+def rank_models(results, metric='test_accuracy', alpha=0.05, higher_is_better=True):
+    """Ranks the models on one metric over the (paired) folds.
+
+    1. Wilcoxon for every pair of models, with the p-values adjusted by Holm.
+       A model wins a pair when the adjusted p < alpha and its metric is better
+       (median of the fold differences); otherwise the pair is a tie.
+       score = wins - losses.
+    2. Mean rank: the models are ranked in each fold (1 = best, ties share the
+       average position) and the positions are averaged over the folds. The
+       Friedman test checks whether any model differs from the others.
+
+    Returns (ranking, pairs, friedman)."""
+    models = list(results)
+    data = pd.DataFrame({
+        m: results[m].sort_values('fold')[metric].reset_index(drop=True)
+        for m in models
+    })
+    sign = 1 if higher_is_better else -1
+
+    # 1. Wilcoxon for each pair, adjusted by Holm
+    pairs = []
+    for a, b in combinations(models, 2):
+        diff = data[a] - data[b]
+        p = stats.wilcoxon(data[a], data[b]).pvalue if np.any(diff != 0) else 1.0
+        median = diff.median()
+        if median == 0:
+            median = diff.mean()
+        pairs.append({
+            'model_a': a,
+            'model_b': b,
+            'mean_a': data[a].mean(),
+            'mean_b': data[b].mean(),
+            'diff_median': diff.median(),
+            'folds_a_better': int((sign * diff > 0).sum()),
+            'folds_b_better': int((sign * diff < 0).sum()),
+            'wilcoxon_p': p,
+            '_better': a if sign * median > 0 else (b if sign * median < 0 else None)
+        })
+    pairs = pd.DataFrame(pairs)
+    pairs['wilcoxon_p_holm'] = holm_correction(pairs['wilcoxon_p'])
+    pairs['significant'] = pairs['wilcoxon_p_holm'] < alpha
+    pairs['winner'] = [r['_better'] if r['significant'] and r['_better'] else 'empate'
+                       for _, r in pairs.iterrows()]
+    pairs = pairs.drop(columns='_better')
+
+    # 2. mean rank over the folds and Friedman test
+    ranks = data.rank(axis=1, ascending=not higher_is_better, method='average')
+    friedman = {'statistic': np.nan, 'p_value': np.nan}
+    if len(models) >= 3:
+        res = stats.friedmanchisquare(*[data[m] for m in models])
+        friedman = {'statistic': res.statistic, 'p_value': res.pvalue}
+
+    rows = []
+    for m in models:
+        involved = pairs[(pairs['model_a'] == m) | (pairs['model_b'] == m)]
+        wins = int((involved['winner'] == m).sum())
+        ties = int((involved['winner'] == 'empate').sum())
+        losses = len(involved) - wins - ties
+        rows.append({
+            'model': m,
+            metric: '{:.4f} ± {:.4f}'.format(data[m].mean(), data[m].std()),
+            'wins': wins,
+            'ties': ties,
+            'losses': losses,
+            'score': wins - losses,
+            'mean_rank': ranks[m].mean()
+        })
+    ranking = pd.DataFrame(rows).sort_values(['score', 'mean_rank'],
+                                             ascending=[False, True])
+    ranking.insert(0, 'position', range(1, len(ranking) + 1))
+
+    return ranking.reset_index(drop=True), pairs, friedman
+# end rank_models
