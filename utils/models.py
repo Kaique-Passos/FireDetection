@@ -356,5 +356,39 @@ models_conf['resnet18_imagenet'] = {
     'scheduler_params': {}
 }
 
+# ConvNeXt V2 Atto (2023) com pesos da ImageNet, vinda da biblioteca timm,
+# no mesmo esquema da 'mobilenetv3_imagenet' (normalização da ImageNet e lr 1e-4)
+models_conf['convnextv2_atto_imagenet'] = {
+    'img_dims': (224, 224),
+    'model_name': 'ConvNeXt V2 Atto (ImageNet)',
+    'model_path': 'model_convnextv2_atto_imagenet.pth',
+    'class_name': 'ConvNeXtV2AttoImageNet',
+    'module_name': 'models.convnextv2',
+    'criterion': CrossEntropyLoss(),
+    'optimizer': optim.Adam,
+    'optimizer_params': {'lr': 1e-4},
+
+    'preprocess_train': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_val': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'preprocess_test': transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        imagenet_normalize
+    ]),
+
+    'scheduler': None,
+    'scheduler_params': {}
+}
+
 def get_config(base_model):
     return models_conf[base_model]
